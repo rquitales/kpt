@@ -34,6 +34,9 @@ import (
 	"sigs.k8s.io/kustomize/kyaml/yaml"
 )
 
+// warnInvInKptfile is the warning message when the inventory information is present within the Kptfile.
+const warnInvInKptfile = "[WARN] The resourcegroup file was not found... Using Kptfile to gather inventory information. We recommend migrating to a resourcegroup file for inventories. Please migrate with `kpt live migrate`."
+
 // InventoryInfoValidationError is the error returned if validation of the
 // inventory information fails.
 type InventoryInfoValidationError struct {
@@ -219,11 +222,16 @@ func readInvInfoFromDisk(path, rgfile string) (kptfilev1.Inventory, error) {
 		}
 	}
 
+	var rgFileMissing bool
 	// Check if resourcegroup exists and use inventory info from there if provided.
 	if rgfile != "" {
 		rg, err := p.ReadRGFile(rgfile)
-		if err != nil && !errors.Is(err, os.ErrNotExist) {
-			return kptfilev1.Inventory{}, nil
+		if err != nil {
+			if !errors.Is(err, os.ErrNotExist) {
+				return kptfilev1.Inventory{}, nil
+			}
+
+			rgFileMissing = true
 		}
 
 		// Ensure we only have at most 1 instance of an inventory.
@@ -237,8 +245,16 @@ func readInvInfoFromDisk(path, rgfile string) (kptfilev1.Inventory, error) {
 			}
 
 			if kf.Inventory != nil {
+				if rgFileMissing {
+					fmt.Println(warnInvInKptfile)
+				}
 				return *kf.Inventory, nil
 			}
+		}
+
+		// Both Kptfile inventory and ResourceGroup are empty.
+		if rg == nil {
+			return kptfilev1.Inventory{}, nil
 		}
 
 		return kptfilev1.Inventory{

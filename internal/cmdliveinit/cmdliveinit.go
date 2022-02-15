@@ -5,15 +5,12 @@ package cmdliveinit
 
 import (
 	"context"
-	"crypto/sha1"
 	goerrors "errors"
 	"fmt"
 	"io/ioutil"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
-	"time"
 
 	"github.com/GoogleContainerTools/kpt/internal/docs/generated/livedocs"
 	"github.com/GoogleContainerTools/kpt/internal/errors"
@@ -78,9 +75,10 @@ func NewRunner(ctx context.Context, factory cmdutil.Factory,
 	r.Command = cmd
 
 	cmd.Flags().StringVar(&r.Name, "name", "", "Inventory object name")
-	cmd.Flags().BoolVar(&r.Force, "force", false, "Set inventory values even if already set in Kptfile")
+	cmd.Flags().BoolVar(&r.Force, "force", false, "Set inventory values even if already set in Kptfile or ResourceGroup file")
 	cmd.Flags().BoolVar(&r.Quiet, "quiet", false, "If true, do not print output message for initialization")
 	cmd.Flags().StringVar(&r.InventoryID, "inventory-id", "", "Inventory id for the package")
+	cmd.Flags().StringVar(&r.RGFile, "rg-file", rgfilev1alpha1.RGFileName, "The name of the ResourceGroup file for storing inventory information")
 	return r
 }
 
@@ -153,76 +151,9 @@ type ConfigureInventoryInfo struct {
 	Force bool
 }
 
-// Run updates the inventory info in the package given by the Path.
+// Run updates the inventory info in the package given by // Run updates the inventory info in the package given by the Path.
 func (c *ConfigureInventoryInfo) Run(ctx context.Context) error {
-	// Use ResourceGroup file for inventory logic if the resourcegroup file
-	// is set directly. For this feature gate, the resourcegroup must be directly set
-	// through our tests since we are not exposing this through the command surface as a
-	// flag, currently. When we promote this, the resourcegroup filename can be empty and
-	// the default filename value will be inferred/used.
-	if c.RGFileName != "" {
-		return c.runLiveInitWithRGFile(ctx)
-	}
-
 	const op errors.Op = "cmdliveinit.Run"
-	pr := printer.FromContextOrDie(ctx)
-
-	var name, namespace, inventoryID string
-
-	ns, err := config.FindNamespace(c.Factory.ToRawKubeConfigLoader(), c.Pkg.UniquePath.String())
-	if err != nil {
-		return errors.E(op, c.Pkg.UniquePath, err)
-	}
-	namespace = strings.TrimSpace(ns)
-	if !c.Quiet {
-		pr.Printf("initializing Kptfile inventory info (namespace: %s)...", namespace)
-	}
-
-	// Autogenerate the name if it is not provided through the flag.
-	if c.Name == "" {
-		randomSuffix := common.RandomStr()
-		name = fmt.Sprintf("%s-%s", defaultInventoryName, randomSuffix)
-	} else {
-		name = c.Name
-	}
-	// Generate the inventory id if one is not specified through a flag.
-	if c.InventoryID == "" {
-		id, err := generateID(namespace, name, time.Now())
-		if err != nil {
-			return errors.E(op, c.Pkg.UniquePath, err)
-		}
-		inventoryID = id
-	} else {
-		inventoryID = c.InventoryID
-	}
-	// Finally, update these values in the Inventory section of the Kptfile.
-	err = updateKptfile(c.Pkg, &kptfilev1.Inventory{
-		Namespace:   namespace,
-		Name:        name,
-		InventoryID: inventoryID,
-	}, c.Force)
-	if !c.Quiet {
-		if err == nil {
-			pr.Printf("success\n")
-		} else {
-			pr.Printf("failed\n")
-		}
-	}
-	if err != nil {
-		return errors.E(op, c.Pkg.UniquePath, err)
-	}
-	// add metrics annotation to package resources to track the usage as the resources
-	// will be applied using kpt live group
-	at := attribution.Attributor{PackagePaths: []string{c.Pkg.UniquePath.String()}, CmdGroup: "live"}
-	at.Process()
-	return nil
-}
-
-// func runLiveInitWithRGFile is a modified version of ConfigureInventoryInfo.Run that stores the
-// package inventory information in a separate resourcegroup file. The logic for this is branched into
-// a separate function to enable feature gating.
-func (c *ConfigureInventoryInfo) runLiveInitWithRGFile(ctx context.Context) error {
-	const op errors.Op = "cmdliveinit.runLiveInitWithRGFile"
 	pr := printer.FromContextOrDie(ctx)
 
 	namespace, err := config.FindNamespace(c.Factory.ToRawKubeConfigLoader(), c.Pkg.UniquePath.String())
@@ -287,7 +218,7 @@ func createRGFile(p *pkg.Pkg, inv *kptfilev1.Inventory, filename string, force b
 
 	// Validate the inventory values don't already exist in Resourcegroup.
 	if rg != nil && !force {
-		return errors.E(op, p.UniquePath, &InvExistsError{})
+		return errors.E(op, p.UniquePath, &InvInRGExistsError{})
 	}
 	// Initialize new resourcegroup object, as rg should have been nil.
 	rg = &rgfilev1alpha1.ResourceGroup{ResourceMeta: rgfilev1alpha1.DefaultMeta}
@@ -350,35 +281,6 @@ func updateKptfile(p *pkg.Pkg, inv *kptfilev1.Inventory, force bool) error {
 		return errors.E(op, p.UniquePath, err)
 	}
 	return nil
-}
-
-// generateID returns the string which is a SHA1 hash of the passed namespace
-// and name, with the unix timestamp string concatenated. Returns an error
-// if either the namespace or name are empty.
-func generateID(namespace string, name string, t time.Time) (string, error) {
-	const op errors.Op = "cmdliveinit.generateID"
-	hashStr, err := generateHash(namespace, name)
-	if err != nil {
-		return "", errors.E(op, err)
-	}
-	timeStr := strconv.FormatInt(t.UTC().UnixNano(), 10)
-	return fmt.Sprintf("%s-%s", hashStr, timeStr), nil
-}
-
-// generateHash returns the SHA1 hash of the concatenated "namespace:name" string,
-// or an error if either namespace or name is empty.
-func generateHash(namespace string, name string) (string, error) {
-	const op errors.Op = "cmdliveinit.generateHash"
-	if len(namespace) == 0 || len(name) == 0 {
-		return "", errors.E(op,
-			fmt.Errorf("can not generate hash with empty namespace or name"))
-	}
-	str := fmt.Sprintf("%s:%s", namespace, name)
-	h := sha1.New()
-	if _, err := h.Write([]byte(str)); err != nil {
-		return "", errors.E(op, err)
-	}
-	return fmt.Sprintf("%x", (h.Sum(nil))), nil
 }
 
 // kptfileInventoryEmpty returns true if the Inventory structure
