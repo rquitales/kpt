@@ -240,3 +240,30 @@ func TestIsResourceGroupInventory(t *testing.T) {
 		})
 	}
 }
+
+func Test_min(t *testing.T) {
+	tests := []struct {
+		name       string
+		i, j, want int
+	}{
+		{
+			"Happy Path",
+			1, 2, 1,
+		},
+		{
+			"Happy Path Flipped",
+			2, 1, 1,
+		},
+		{
+			"Should not error on same value",
+			99, 99, 99,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := min(tc.i, tc.j); got != tc.want {
+				t.Errorf("min() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
