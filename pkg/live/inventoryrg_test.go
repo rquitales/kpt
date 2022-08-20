@@ -151,7 +151,7 @@ func TestLoadStore(t *testing.T) {
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			wrapped := WrapInventoryObj(tc.inv)
+			wrapped := WrapInventoryObj(0)(tc.inv)
 			_ = wrapped.Store(tc.objs, tc.objStatus)
 			invStored, err := wrapped.GetObject()
 			if tc.isError {
@@ -164,7 +164,7 @@ func TestLoadStore(t *testing.T) {
 				t.Fatalf("unexpected error %v received", err)
 				return
 			}
-			wrapped = WrapInventoryObj(invStored)
+			wrapped = WrapInventoryObj(0)(invStored)
 			objs, err := wrapped.Load()
 			if !tc.isError && err != nil {
 				t.Fatalf("unexpected error %v received", err)

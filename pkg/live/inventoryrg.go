@@ -77,17 +77,20 @@ func (icm *InventoryResourceGroup) Strategy() inventory.Strategy {
 var _ inventory.Storage = &InventoryResourceGroup{}
 var _ inventory.Info = &InventoryResourceGroup{}
 
-// WrapInventoryObj takes a passed ResourceGroup (as a resource.Info),
+// WrapInventoryObj returns a closure that takes a passed ResourceGroup (as a resource.Info),
 // wraps it with the InventoryResourceGroup and upcasts the wrapper as
-// a Storage interface.
+// a Storage interface. The number of managed resources per ResourceGroup is specified
+// by the resourceCount argument.
 // Strategy is hardcoded to be of NameStrategy as logic for sharded ResourceGroups
 // needs to be handled within kpt, and using label strategy would cause errors in
 // cli-utils.
-func WrapInventoryObj(obj *unstructured.Unstructured) inventory.Storage {
-	if obj != nil {
-		klog.V(4).Infof("wrapping Inventory obj: %s/%s\n", obj.GetNamespace(), obj.GetName())
+func WrapInventoryObj(resourceCount int) func(*unstructured.Unstructured) inventory.Storage {
+	return func(obj *unstructured.Unstructured) inventory.Storage {
+		if obj != nil {
+			klog.V(4).Infof("wrapping Inventory obj: %s/%s\n", obj.GetNamespace(), obj.GetName())
+		}
+		return &InventoryResourceGroup{inv: obj, strategy: inventory.NameStrategy, resourceCount: resourceCount}
 	}
-	return &InventoryResourceGroup{inv: obj, strategy: inventory.NameStrategy}
 }
 
 // WrapInventoryInfoObj takes a passed ResourceGroup (as a resource.Info),

@@ -82,6 +82,8 @@ func NewRunner(
 		"dry-run apply for the resources in the package.")
 	c.Flags().BoolVar(&r.printStatusEvents, "show-status-events", false,
 		"Print status events (always enabled for table output)")
+	c.Flags().IntVar(&r.resourceCount, "max-resourcegroup-objects", 0,
+		"The maximum number of objects to stored within individual sharded ResourceGroup objects. Defaults to 0 which disables sharding.")
 	return r
 }
 
@@ -107,6 +109,7 @@ type Runner struct {
 	inventoryPolicyString        string
 	dryRun                       bool
 	printStatusEvents            bool
+	resourceCount                int
 
 	inventoryPolicy inventory.Policy
 	prunePropPolicy metav1.DeletionPropagation
@@ -217,7 +220,7 @@ func runApply(r *Runner, invInfo inventory.Info, objs []*unstructured.Unstructur
 
 	// Run the applier. It will return a channel where we can receive updates
 	// to keep track of progress and any issues.
-	invClient, err := inventory.NewClient(r.factory, live.WrapInventoryObj, live.InvToUnstructuredFunc, inventory.StatusPolicyAll)
+	invClient, err := inventory.NewClient(r.factory, live.WrapInventoryObj(r.resourceCount), live.InvToUnstructuredFunc, inventory.StatusPolicyAll)
 	if err != nil {
 		return err
 	}
