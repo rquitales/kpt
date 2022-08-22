@@ -19,12 +19,12 @@
 //go:generate $GOBIN/mdtogo site/reference/cli/alpha/repo internal/docs/generated/repodocs --license=none --recursive=true --strategy=cmdDocs
 //go:generate $GOBIN/mdtogo site/reference/cli/alpha/rpkg internal/docs/generated/rpkgdocs --license=none --recursive=true --strategy=cmdDocs
 //go:generate $GOBIN/mdtogo site/reference/cli/alpha/sync internal/docs/generated/syncdocs --license=none --recursive=true --strategy=cmdDocs
+//go:generate $GOBIN/mdtogo site/reference/cli/alpha/wasm internal/docs/generated/wasmdocs --license=none --recursive=true --strategy=cmdDocs
 //go:generate $GOBIN/mdtogo site/reference/cli/README.md internal/docs/generated/overview --license=none --strategy=cmdDocs
 package main
 
 import (
 	"context"
-	"flag"
 	"fmt"
 	"os"
 
@@ -48,22 +48,15 @@ func main() {
 // runMain does the initial setup in order to run kpt. The return value from
 // this function will be the exit code when kpt terminates.
 func runMain() int {
-	var logFlags flag.FlagSet
 	var err error
 
 	ctx := context.Background()
 
-	cmd := run.GetMain(ctx)
-
 	// Enable commandline flags for klog.
 	// logging will help in collecting debugging information from users
-	// Note(droot): There are too many flags exposed that makes the command
-	// usage verbose but couldn't find a way to make it less verbose.
-	klog.InitFlags(&logFlags)
-	// By default klog v1 logs to stderr, switch that off
-	_ = logFlags.Set("logtostderr", "false")
-	_ = logFlags.Set("alsologtostderr", "true")
-	cmd.Flags().AddGoFlagSet(&logFlags)
+	klog.InitFlags(nil)
+
+	cmd := run.GetMain(ctx)
 
 	err = cli.RunNoErrOutput(cmd)
 	if err != nil {

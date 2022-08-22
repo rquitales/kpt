@@ -206,7 +206,7 @@ func removeTreeEntry(tree *object.Tree, name string) {
 
 // storeFile writes a blob with contents at the specified path
 func (h *commitHelper) storeFile(path, contents string) error {
-	hash, err := h.storeBlob(contents)
+	hash, err := storeBlob(h.storer, contents)
 	if err != nil {
 		return err
 	}
@@ -214,6 +214,23 @@ func (h *commitHelper) storeFile(path, contents string) error {
 	if err := h.storeBlobHashInTrees(path, hash); err != nil {
 		return err
 	}
+	return nil
+}
+
+// storeTree sets the tree of the provided path to the tree
+// referenced by the provided hash.
+func (h *commitHelper) storeTree(path string, hash plumbing.Hash) error {
+	parentPath, pkg := split(path)
+	tree := h.ensureTree(parentPath)
+	setOrAddTreeEntry(tree, object.TreeEntry{
+		Name: pkg,
+		Mode: filemode.Dir,
+	})
+	pTree, err := object.GetTree(h.storer, hash)
+	if err != nil {
+		return err
+	}
+	h.trees[path] = pTree
 	return nil
 }
 
@@ -265,6 +282,9 @@ func (h *commitHelper) commit(ctx context.Context, message string, pkgPath strin
 	if err != nil {
 		return plumbing.ZeroHash, plumbing.ZeroHash, err
 	}
+	// Update the parentCommitHash so the correct parent will be used for the
+	// next commit.
+	h.parentCommitHash = commit
 
 	if pkg, ok := h.trees[pkgPath]; ok {
 		pkgTree = pkg.Hash
@@ -276,9 +296,9 @@ func (h *commitHelper) commit(ctx context.Context, message string, pkgPath strin
 }
 
 // storeBlob is a helper method to write a blob to the git store.
-func (h *commitHelper) storeBlob(value string) (plumbing.Hash, error) {
+func storeBlob(storer storage.Storer, value string) (plumbing.Hash, error) {
 	data := []byte(value)
-	eo := h.storer.NewEncodedObject()
+	eo := storer.NewEncodedObject()
 	eo.SetType(plumbing.BlobObject)
 	eo.SetSize(int64(len(data)))
 
@@ -296,7 +316,7 @@ func (h *commitHelper) storeBlob(value string) (plumbing.Hash, error) {
 		return plumbing.Hash{}, err
 	}
 
-	return h.storer.SetEncodedObject(eo)
+	return storer.SetEncodedObject(eo)
 }
 
 // split returns the full directory path and file name
@@ -436,13 +456,17 @@ func (h *commitHelper) storeCommit(parent plumbing.Hash, tree plumbing.Hash, use
 		TreeHash: tree,
 	}
 
+	return storeCommit(h.storer, parent, commit)
+}
+
+func storeCommit(storer storage.Storer, parent plumbing.Hash, commit *object.Commit) (plumbing.Hash, error) {
 	if !parent.IsZero() {
 		commit.ParentHashes = []plumbing.Hash{parent}
 	}
 
-	eo := h.storer.NewEncodedObject()
+	eo := storer.NewEncodedObject()
 	if err := commit.Encode(eo); err != nil {
 		return plumbing.Hash{}, err
 	}
-	return h.storer.SetEncodedObject(eo)
+	return storer.SetEncodedObject(eo)
 }

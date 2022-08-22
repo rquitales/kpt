@@ -16,7 +16,6 @@ package addmergecomment
 
 import (
 	"fmt"
-	"io/ioutil"
 	"os"
 	"strings"
 
@@ -71,7 +70,6 @@ func Process(paths ...string) error {
 // One known caveat is that upstream meta change can cause downstream origin mismatch. This potentially causes the 3-way merge
 // to fail in pkg update step.
 func addUpstreamAnnotation(object *kyaml.RNode, mergeComment string) error {
-	annotations := object.GetAnnotations()
 	group, _ := resid.ParseGroupVersion(object.GetApiVersion())
 	var name, namespace string
 	if strings.Contains(mergeComment, merge.MergeCommentPrefix) {
@@ -90,8 +88,8 @@ func addUpstreamAnnotation(object *kyaml.RNode, mergeComment string) error {
 	} else if object.GetNamespace() == resid.TotallyNotANamespace {
 		namespace = unknownNamespace
 	}
-	annotations[upstreamIdentifier] = fmt.Sprintf(upstreamIdentifierFmt, group, object.GetKind(), namespace, name)
-	return object.SetAnnotations(annotations)
+	upstreamIdentifierValue := fmt.Sprintf(upstreamIdentifierFmt, group, object.GetKind(), namespace, name)
+	return object.PipeE(kyaml.SetAnnotation(upstreamIdentifier, upstreamIdentifierValue))
 }
 
 // Filter implements kyaml.Filter
@@ -139,7 +137,7 @@ func (amc *AddMergeComment) Filter(object *kyaml.RNode) (*kyaml.RNode, error) {
 // new temp directory and adds merge comment to the resources in directory
 // it also returns the cleanup function to clean the created temp directory
 func ProcessWithCleanup(path string) (string, func(), error) {
-	expected, err := ioutil.TempDir("", "")
+	expected, err := os.MkdirTemp("", "")
 	if err != nil {
 		return "", nil, err
 	}

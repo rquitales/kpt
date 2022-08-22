@@ -20,11 +20,13 @@ import (
 	"os"
 	"time"
 
+	alphaprinterstable "github.com/GoogleContainerTools/kpt/internal/alpha/printers/table"
 	"github.com/GoogleContainerTools/kpt/internal/cmdutil"
 	"github.com/GoogleContainerTools/kpt/internal/docs/generated/livedocs"
 	"github.com/GoogleContainerTools/kpt/internal/util/argutil"
 	"github.com/GoogleContainerTools/kpt/internal/util/strings"
 	"github.com/GoogleContainerTools/kpt/pkg/live"
+	"github.com/GoogleContainerTools/kpt/pkg/status"
 	"github.com/spf13/cobra"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -35,6 +37,7 @@ import (
 	"sigs.k8s.io/cli-utils/pkg/common"
 	"sigs.k8s.io/cli-utils/pkg/inventory"
 	"sigs.k8s.io/cli-utils/pkg/printers"
+	cliutilsprinter "sigs.k8s.io/cli-utils/pkg/printers/printer"
 )
 
 // NewRunner returns a command runner
@@ -42,12 +45,14 @@ func NewRunner(
 	ctx context.Context,
 	factory util.Factory,
 	ioStreams genericclioptions.IOStreams,
+	alpha bool,
 ) *Runner {
 	r := &Runner{
 		ctx:         ctx,
 		ioStreams:   ioStreams,
 		factory:     factory,
 		applyRunner: runApply,
+		alpha:       alpha,
 	}
 	c := &cobra.Command{
 		Use:     "apply [PKG_PATH | -]",
@@ -88,13 +93,14 @@ func NewRunner(
 }
 
 func NewCommand(ctx context.Context, factory util.Factory,
-	ioStreams genericclioptions.IOStreams) *cobra.Command {
-	return NewRunner(ctx, factory, ioStreams).Command
+	ioStreams genericclioptions.IOStreams, alpha bool) *cobra.Command {
+	return NewRunner(ctx, factory, ioStreams, alpha).Command
 }
 
 // Runner contains the run function
 type Runner struct {
 	ctx        context.Context
+	alpha      bool
 	Command    *cobra.Command
 	PreProcess func(info inventory.Info, strategy common.DryRunStrategy) (inventory.Policy, error)
 	ioStreams  genericclioptions.IOStreams
@@ -225,9 +231,15 @@ func runApply(r *Runner, invInfo inventory.Info, objs []*unstructured.Unstructur
 		return err
 	}
 
+	statusWatcher, err := status.NewStatusWatcher(r.factory)
+	if err != nil {
+		return err
+	}
+
 	applier, err := apply.NewApplierBuilder().
 		WithFactory(r.factory).
 		WithInventoryClient(invClient).
+		WithStatusWatcher(statusWatcher).
 		Build()
 	if err != nil {
 		return err
@@ -254,6 +266,13 @@ func runApply(r *Runner, invInfo inventory.Info, objs []*unstructured.Unstructur
 
 	// The printer will print updates from the channel. It will block
 	// until the channel is closed.
-	printer := printers.GetPrinter(r.output, r.ioStreams)
+	var printer cliutilsprinter.Printer
+	if r.alpha && r.output == printers.TablePrinter {
+		printer = &alphaprinterstable.Printer{
+			IOStreams: r.ioStreams,
+		}
+	} else {
+		printer = printers.GetPrinter(r.output, r.ioStreams)
+	}
 	return printer.Print(ch, dryRunStrategy, r.printStatusEvents)
 }

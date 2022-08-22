@@ -20,11 +20,12 @@ FROM gcr.io/kpt-fn/set-annotations:v0.1.4 as set-annotations
 FROM gcr.io/kpt-fn/set-image:v0.1.0 as set-image
 FROM gcr.io/kpt-fn/set-labels:v0.1.5 as set-labels
 FROM gcr.io/kpt-fn/set-namespace:v0.2.0 as set-namespace
+FROM gcr.io/kpt-fn/set-namespace:v0.3.4 as set-namespace-v3
 FROM gcr.io/kpt-fn/set-project-id:v0.2.0 as set-project-id
 FROM gcr.io/kpt-fn/starlark:v0.3.0 as starlark
 FROM gcr.io/kpt-fn/upsert-resource:v0.2.0 as upsert-resource
 
-FROM golang:1.17.6-alpine3.15 as builder
+FROM golang:1.18.5-alpine3.16 as builder
 WORKDIR /go/src/github.com/GoogleContainerTools/kpt
 
 RUN go install github.com/grpc-ecosystem/grpc-health-probe@v0.4.11
@@ -52,6 +53,7 @@ COPY --from=set-annotations        /usr/local/bin/function /functions/set-annota
 COPY --from=set-image              /usr/local/bin/function /functions/set-image
 COPY --from=set-labels             /usr/local/bin/function /functions/set-labels
 COPY --from=set-namespace          /usr/local/bin/function /functions/set-namespace
+COPY --from=set-namespace-v3       /usr/local/bin/function /functions/set-namespace-v3
 COPY --from=set-project-id         /usr/local/bin/function /functions/set-project-id
 COPY --from=starlark               /usr/local/bin/star     /functions/starlark
 COPY --from=upsert-resource        /usr/local/bin/function /functions/upsert-resource

@@ -16,7 +16,6 @@ package runner
 
 import (
 	"fmt"
-	"io/ioutil"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -62,6 +61,8 @@ const (
 	execScript          string = "exec.sh"
 	CommandFnEval       string = "eval"
 	CommandFnRender     string = "render"
+
+	allowWasmFlag string = "--allow-alpha-wasm"
 )
 
 // NewRunner returns a new runner for pkg
@@ -137,7 +138,7 @@ func (r *Runner) runTearDownScript(pkgPath string) error {
 
 func (r *Runner) runFnEval() error {
 	r.t.Logf("Running test against package %s\n", r.pkgName)
-	tmpDir, err := ioutil.TempDir("", "kpt-fn-e2e-*")
+	tmpDir, err := os.MkdirTemp("", "kpt-fn-e2e-*")
 	if err != nil {
 		return fmt.Errorf("failed to create temporary dir: %w", err)
 	}
@@ -195,6 +196,9 @@ func (r *Runner) runFnEval() error {
 			}
 			if destDir != "" {
 				kptArgs = append(kptArgs, "-o", destDir)
+			}
+			if r.testCase.Config.AllowWasm {
+				kptArgs = append(kptArgs, allowWasmFlag)
 			}
 			if r.testCase.Config.ImagePullPolicy != "" {
 				kptArgs = append(kptArgs, "--image-pull-policy", r.testCase.Config.ImagePullPolicy)
@@ -272,19 +276,19 @@ func sanitizeTimestamps(stderr string) string {
 
 // IsFnResultExpected determines if function results are expected for this testcase.
 func (r *Runner) IsFnResultExpected() bool {
-	_, err := ioutil.ReadFile(filepath.Join(r.testCase.Path, expectedDir, expectedResultsFile))
+	_, err := os.ReadFile(filepath.Join(r.testCase.Path, expectedDir, expectedResultsFile))
 	return err == nil
 }
 
 // IsOutOfPlace determines if command output is saved in a different directory (out-of-place).
 func (r *Runner) IsOutOfPlace() bool {
-	_, err := ioutil.ReadDir(filepath.Join(r.testCase.Path, outDir))
+	_, err := os.ReadDir(filepath.Join(r.testCase.Path, outDir))
 	return err == nil
 }
 
 func (r *Runner) runFnRender() error {
 	r.t.Logf("Running test against package %s\n", r.pkgName)
-	tmpDir, err := ioutil.TempDir("", "kpt-pipeline-e2e-*")
+	tmpDir, err := os.MkdirTemp("", "kpt-pipeline-e2e-*")
 	if err != nil {
 		return fmt.Errorf("failed to create temporary dir: %w", err)
 	}
@@ -362,6 +366,10 @@ func (r *Runner) runFnRender() error {
 
 			if r.testCase.Config.AllowExec {
 				kptArgs = append(kptArgs, "--allow-exec")
+			}
+
+			if r.testCase.Config.AllowWasm {
+				kptArgs = append(kptArgs, allowWasmFlag)
 			}
 
 			if r.testCase.Config.DisableOutputTruncate {
@@ -507,7 +515,7 @@ func readActualResults(resultsPath string) (string, error) {
 	if resultsPath == "" {
 		return "", nil
 	}
-	l, err := ioutil.ReadDir(resultsPath)
+	l, err := os.ReadDir(resultsPath)
 	if err != nil {
 		return "", fmt.Errorf("failed to get files in results dir: %w", err)
 	}
@@ -519,7 +527,7 @@ func readActualResults(resultsPath string) (string, error) {
 		return "", nil
 	}
 	resultsFile := l[0].Name()
-	actualResults, err := ioutil.ReadFile(filepath.Join(resultsPath, resultsFile))
+	actualResults, err := os.ReadFile(filepath.Join(resultsPath, resultsFile))
 	if err != nil {
 		return "", fmt.Errorf("failed to read actual results: %w", err)
 	}
@@ -552,7 +560,7 @@ type expected struct {
 func newExpected(path string) (expected, error) {
 	e := expected{}
 	// get expected results
-	expectedResults, err := ioutil.ReadFile(filepath.Join(path, expectedDir, expectedResultsFile))
+	expectedResults, err := os.ReadFile(filepath.Join(path, expectedDir, expectedResultsFile))
 	switch {
 	case os.IsNotExist(err):
 		e.Results = ""
@@ -563,7 +571,7 @@ func newExpected(path string) (expected, error) {
 	}
 
 	// get expected diff
-	expectedDiff, err := ioutil.ReadFile(filepath.Join(path, expectedDir, expectedDiffFile))
+	expectedDiff, err := os.ReadFile(filepath.Join(path, expectedDir, expectedDiffFile))
 	switch {
 	case os.IsNotExist(err):
 		e.Diff = ""
@@ -579,7 +587,7 @@ func newExpected(path string) (expected, error) {
 func (r *Runner) updateExpected(tmpPkgPath, resultsPath, sourceOfTruthPath string) error {
 	if resultsPath != "" {
 		// We update results directory only when a result file already exists.
-		l, err := ioutil.ReadDir(resultsPath)
+		l, err := os.ReadDir(resultsPath)
 		if err != nil {
 			return err
 		}
@@ -589,7 +597,7 @@ func (r *Runner) updateExpected(tmpPkgPath, resultsPath, sourceOfTruthPath strin
 				return err
 			}
 			if actualResults != "" {
-				if err := ioutil.WriteFile(filepath.Join(sourceOfTruthPath, expectedResultsFile), []byte(actualResults+"\n"), 0666); err != nil {
+				if err := os.WriteFile(filepath.Join(sourceOfTruthPath, expectedResultsFile), []byte(actualResults+"\n"), 0666); err != nil {
 					return err
 				}
 			}
@@ -600,7 +608,7 @@ func (r *Runner) updateExpected(tmpPkgPath, resultsPath, sourceOfTruthPath strin
 		return err
 	}
 	if actualDiff != "" {
-		if err := ioutil.WriteFile(filepath.Join(sourceOfTruthPath, expectedDiffFile), []byte(actualDiff+"\n"), 0666); err != nil {
+		if err := os.WriteFile(filepath.Join(sourceOfTruthPath, expectedDiffFile), []byte(actualDiff+"\n"), 0666); err != nil {
 			return err
 		}
 	}

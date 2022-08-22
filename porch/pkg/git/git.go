@@ -22,6 +22,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	kptfilev1 "github.com/GoogleContainerTools/kpt/pkg/api/kptfile/v1"
@@ -31,9 +32,9 @@ import (
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/filemode"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/go-git/go-git/v5/plumbing/transport"
-	"github.com/go-git/go-git/v5/plumbing/transport/http"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
 	"k8s.io/klog/v2"
@@ -51,10 +52,19 @@ type GitRepository interface {
 	GetPackage(ctx context.Context, ref, path string) (repository.PackageRevision, kptfilev1.GitLock, error)
 }
 
+//go:generate stringer -type=MainBranchStrategy -linecomment
+type MainBranchStrategy int
+
+const (
+	ErrorIfMissing   MainBranchStrategy = iota // ErrorIsMissing
+	CreateIfMissing                            // CreateIfMissing
+	SkipVerification                           // SkipVerification
+)
+
 type GitRepositoryOptions struct {
-	CredentialResolver         repository.CredentialResolver
-	UserInfoProvider           repository.UserInfoProvider
-	SkipMainBranchVerification bool
+	CredentialResolver repository.CredentialResolver
+	UserInfoProvider   repository.UserInfoProvider
+	MainBranchStrategy MainBranchStrategy
 }
 
 func OpenRepository(ctx context.Context, name, namespace string, spec *configapi.GitRepository, root string, opts GitRepositoryOptions) (GitRepository, error) {
@@ -124,7 +134,7 @@ func OpenRepository(ctx context.Context, name, namespace string, spec *configapi
 		return nil, err
 	}
 
-	if err := repository.verifyRepository(&opts); err != nil {
+	if err := repository.verifyRepository(ctx, &opts); err != nil {
 		return nil, err
 	}
 
@@ -140,9 +150,13 @@ type gitRepository struct {
 	branch             BranchName // The main branch from repository registration (defaults to 'main' if unspecified)
 	directory          string     // Directory within the repository where to look for packages.
 	repo               *git.Repository
-	cachedCredentials  transport.AuthMethod
 	credentialResolver repository.CredentialResolver
 	userInfoProvider   repository.UserInfoProvider
+
+	// credential contains the information needed to authenticate against
+	// a git repository.
+	credential repository.Credential
+	mutex      sync.Mutex
 }
 
 func (r *gitRepository) ListPackageRevisions(ctx context.Context, filter repository.ListPackageRevisionFilter) ([]repository.PackageRevision, error) {
@@ -188,7 +202,8 @@ func (r *gitRepository) ListPackageRevisions(ctx context.Context, filter reposit
 		case isTagInLocalRepo(ref.Name()):
 			tagged, err := r.loadTaggedPackages(ctx, ref)
 			if err != nil {
-				return nil, fmt.Errorf("failed to load packages from tag %q: %w", name, err)
+				// this tag is not associated with any package (e.g. could be a release tag)
+				continue
 			}
 			for _, p := range tagged {
 				if filter.Matches(p) {
@@ -543,7 +558,9 @@ func (r *gitRepository) loadTaggedPackages(ctx context.Context, tag *plumbing.Re
 
 	if slash < 0 {
 		// tag=<version>
-		return r.discoverFinalizedPackages(ctx, tag)
+		// could be a release tag or something else, we ignore these types of tags
+		return nil, nil
+
 	}
 
 	// tag=<package path>/version
@@ -614,33 +631,26 @@ func (r *gitRepository) dumpAllRefs() {
 	}
 }
 
-func resolveCredential(ctx context.Context, namespace, name string, resolver repository.CredentialResolver) (transport.AuthMethod, error) {
-	cred, err := resolver.ResolveCredential(ctx, namespace, name)
-	if err != nil {
-		return nil, fmt.Errorf("failed to obtain credential from secret %s/%s: %w", namespace, name, err)
+// getAuthMethod fetches the credentials for authenticating to git. It caches the
+// credentials between calls and refresh credentials when the tokens have expired.
+func (r *gitRepository) getAuthMethod(ctx context.Context, forceRefresh bool) (transport.AuthMethod, error) {
+	r.mutex.Lock()
+	defer r.mutex.Unlock()
+
+	// If no secret is provided, we try without any auth.
+	if r.secret == "" {
+		return nil, nil
 	}
 
-	username := cred.Data["username"]
-	password := cred.Data["password"]
-
-	return &http.BasicAuth{
-		Username: string(username),
-		Password: string(password),
-	}, nil
-}
-
-func (r *gitRepository) getAuthMethod(ctx context.Context) (transport.AuthMethod, error) {
-	if r.cachedCredentials == nil {
-		if r.secret != "" {
-			if auth, err := resolveCredential(ctx, r.namespace, r.secret, r.credentialResolver); err != nil {
-				return nil, err
-			} else {
-				r.cachedCredentials = auth
-			}
+	if r.credential == nil || !r.credential.Valid() || forceRefresh {
+		if cred, err := r.credentialResolver.ResolveCredential(ctx, r.namespace, r.secret); err != nil {
+			return nil, fmt.Errorf("failed to obtain credential from secret %s/%s: %w", r.namespace, r.secret, err)
+		} else {
+			r.credential = cred
 		}
 	}
 
-	return r.cachedCredentials, nil
+	return r.credential.ToAuthMethod(), nil
 }
 
 func (r *gitRepository) getRepo() (string, error) {
@@ -656,16 +666,13 @@ func (r *gitRepository) fetchRemoteRepository(ctx context.Context) error {
 	ctx, span := tracer.Start(ctx, "gitRepository::fetchRemoteRepository", trace.WithAttributes())
 	defer span.End()
 
-	auth, err := r.getAuthMethod(ctx)
-	if err != nil {
-		return err
-	}
-
 	// Fetch
-	switch err := r.repo.Fetch(&git.FetchOptions{
-		RemoteName: OriginName,
-		Auth:       auth,
-		Prune:      git.Prune,
+	switch err := r.doGitWithAuth(ctx, func(auth transport.AuthMethod) error {
+		return r.repo.Fetch(&git.FetchOptions{
+			RemoteName: OriginName,
+			Auth:       auth,
+			Prune:      git.Prune,
+		})
 	}); err {
 	case nil: // OK
 	case git.NoErrAlreadyUpToDate:
@@ -679,30 +686,90 @@ func (r *gitRepository) fetchRemoteRepository(ctx context.Context) error {
 }
 
 // Verifies repository. Repository must be fetched already.
-func (r *gitRepository) verifyRepository(opts *GitRepositoryOptions) error {
+func (r *gitRepository) verifyRepository(ctx context.Context, opts *GitRepositoryOptions) error {
 	// When opening a temporary repository, such as for cloning a package
 	// from unregistered upstream, we won't be pushing into the remote so
 	// we don't need to verify presence of the main branch.
-	if !opts.SkipMainBranchVerification {
-		// Check existence of main branch. If it doesn't exist, fail.
-		// If the main branch doesn't exist, we could create draft or proposal branch
-		// which could become the default branch and those are hard to delete.
-		if _, err := r.repo.Reference(r.branch.RefInLocal(), false); err != nil {
+	if opts.MainBranchStrategy == SkipVerification {
+		return nil
+	}
+
+	if _, err := r.repo.Reference(r.branch.RefInLocal(), false); err != nil {
+		switch opts.MainBranchStrategy {
+		case ErrorIfMissing:
 			return fmt.Errorf("branch %q doesn't exist: %v", r.branch, err)
+		case CreateIfMissing:
+			klog.Info("Creating branch %s in repository %s", r.branch, r.name)
+			if err := r.createBranch(ctx, r.branch); err != nil {
+				return fmt.Errorf("error creating main branch %q: %v", r.branch, err)
+			}
+		default:
+			return fmt.Errorf("unknown main branch strategy %q", opts.MainBranchStrategy.String())
 		}
 	}
 	return nil
+}
+
+const (
+	fileContent   = "Created by porch"
+	fileName      = "README.md"
+	commitMessage = "Initial commit for main branch by porch"
+)
+
+// createBranch creates the provided branch by creating a commit containing
+// a README.md file on the root of the repo and then pushing it to the branch.
+func (r *gitRepository) createBranch(ctx context.Context, branch BranchName) error {
+	fileHash, err := storeBlob(r.repo.Storer, fileContent)
+	if err != nil {
+		return err
+	}
+
+	tree := &object.Tree{}
+	tree.Entries = append(tree.Entries, object.TreeEntry{
+		Name: fileName,
+		Mode: filemode.Regular,
+		Hash: fileHash,
+	})
+
+	treeEo := r.repo.Storer.NewEncodedObject()
+	if err := tree.Encode(treeEo); err != nil {
+		return err
+	}
+
+	treeHash, err := r.repo.Storer.SetEncodedObject(treeEo)
+	if err != nil {
+		return err
+	}
+
+	now := time.Now()
+	commit := &object.Commit{
+		Author: object.Signature{
+			Name:  porchSignatureName,
+			Email: porchSignatureEmail,
+			When:  now,
+		},
+		Committer: object.Signature{
+			Name:  porchSignatureName,
+			Email: porchSignatureEmail,
+			When:  now,
+		},
+		Message:  commitMessage,
+		TreeHash: treeHash,
+	}
+	commitHash, err := storeCommit(r.repo.Storer, plumbing.ZeroHash, commit)
+	if err != nil {
+		return err
+	}
+
+	refSpecs := newPushRefSpecBuilder()
+	refSpecs.AddRefToPush(commitHash, branch.RefInLocal())
+	return r.pushAndCleanup(ctx, refSpecs)
 }
 
 // Creates a commit which deletes the package from the branch, and returns its commit hash.
 // If the branch doesn't exist, will return zero hash and no error.
 func (r *gitRepository) createPackageDeleteCommit(ctx context.Context, branch plumbing.ReferenceName, pkg *gitPackageRevision) (plumbing.Hash, error) {
 	var zero plumbing.Hash
-	auth, err := r.getAuthMethod(ctx)
-	if err != nil {
-		return zero, fmt.Errorf("failed to obtain git credentials: %w", err)
-	}
-
 	repo := r.repo
 
 	local, err := refInRemoteFromRefInLocal(branch)
@@ -711,11 +778,13 @@ func (r *gitRepository) createPackageDeleteCommit(ctx context.Context, branch pl
 	}
 	// Fetch the branch
 	// TODO: Fetch only as part of conflict resolution & Retry
-	switch err := repo.Fetch(&git.FetchOptions{
-		RemoteName: OriginName,
-		RefSpecs:   []config.RefSpec{config.RefSpec(fmt.Sprintf("+%s:%s", local, branch))},
-		Auth:       auth,
-		Tags:       git.NoTags,
+	switch err := r.doGitWithAuth(ctx, func(auth transport.AuthMethod) error {
+		return repo.Fetch(&git.FetchOptions{
+			RemoteName: OriginName,
+			RefSpecs:   []config.RefSpec{config.RefSpec(fmt.Sprintf("+%s:%s", local, branch))},
+			Auth:       auth,
+			Tags:       git.NoTags,
+		})
 	}); err {
 	case nil, git.NoErrAlreadyUpToDate:
 		// ok
@@ -768,24 +837,22 @@ func (r *gitRepository) createPackageDeleteCommit(ctx context.Context, branch pl
 }
 
 func (r *gitRepository) pushAndCleanup(ctx context.Context, ph *pushRefSpecBuilder) error {
-	auth, err := r.getAuthMethod(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to obtain git credentials: %w", err)
-	}
-
 	specs, require, err := ph.BuildRefSpecs()
 	if err != nil {
 		return err
 	}
 
 	klog.Infof("pushing refs: %v", specs)
-	if err := r.repo.Push(&git.PushOptions{
-		RemoteName:        OriginName,
-		RefSpecs:          specs,
-		Auth:              auth,
-		RequireRemoteRefs: require,
-		// TODO(justinsb): Need to ensure this is a compare-and-swap
-		Force: true,
+
+	if err := r.doGitWithAuth(ctx, func(auth transport.AuthMethod) error {
+		return r.repo.Push(&git.PushOptions{
+			RemoteName:        OriginName,
+			RefSpecs:          specs,
+			Auth:              auth,
+			RequireRemoteRefs: require,
+			// TODO(justinsb): Need to ensure this is a compare-and-swap
+			Force: true,
+		})
 	}); err != nil {
 		return err
 	}
@@ -834,15 +901,6 @@ func (r *gitRepository) loadTasks(ctx context.Context, startCommit *object.Commi
 				// tasks in chronological order.
 				if gitAnnotation.Task != nil {
 					tasks = append(tasks, *gitAnnotation.Task)
-				}
-
-				// This case handles multiple tasks that appear in a single commit, which
-				// appear in chronological order within the gitAnnotation.
-				// The entire `tasks` slice will get reversed later, so in order for the tasks
-				// to stay in chronological order, we iterate through them in reverse order.
-				for i := len(gitAnnotation.Tasks) - 1; i >= 0; i-- {
-					t := gitAnnotation.Tasks[i]
-					tasks = append(tasks, *t)
 				}
 
 				lastTask := tasks[len(tasks)-1]

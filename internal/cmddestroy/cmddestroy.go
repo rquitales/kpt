@@ -24,6 +24,7 @@ import (
 	"github.com/GoogleContainerTools/kpt/internal/util/strings"
 	kptfilev1 "github.com/GoogleContainerTools/kpt/pkg/api/kptfile/v1"
 	"github.com/GoogleContainerTools/kpt/pkg/live"
+	"github.com/GoogleContainerTools/kpt/pkg/status"
 	"github.com/spf13/cobra"
 	"k8s.io/cli-runtime/pkg/genericclioptions"
 	"k8s.io/kubectl/pkg/cmd/util"
@@ -164,7 +165,16 @@ func runDestroy(r *Runner, inv inventory.Info, kptInv kptfilev1.Inventory, dryRu
 		return err
 	}
 
-	destroyer, err := apply.NewDestroyer(r.factory, invClient)
+	statusWatcher, err := status.NewStatusWatcher(r.factory)
+	if err != nil {
+		return err
+	}
+
+	destroyer, err := apply.NewDestroyerBuilder().
+		WithFactory(r.factory).
+		WithInventoryClient(invClient).
+		WithStatusWatcher(statusWatcher).
+		Build()
 	if err != nil {
 		return err
 	}
