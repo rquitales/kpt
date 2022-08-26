@@ -16,7 +16,7 @@ GOLANG_VERSION         := 1.18.3
 GORELEASER_CONFIG      = release/tag/goreleaser.yaml
 GORELEASER_IMAGE       := ghcr.io/goreleaser/goreleaser-cross:v$(GOLANG_VERSION)
 
-.PHONY: docs license fix vet fmt lint test build tidy
+.PHONY: docs license fix vet fmt lint test build tidy release
 
 GOBIN := $(shell go env GOPATH)/bin
 GIT_COMMIT := $(shell git rev-parse --short HEAD)
@@ -174,6 +174,5 @@ release:
 		-v /var/run/docker.sock:/var/run/docker.sock \
 		-v `pwd`:/go/src/github.com/GoogleContainerTools/kpt \
 		-w /go/src/github.com/GoogleContainerTools/kpt \
-		$(GORELEASER_IMAGE) \
-		-f "$(GORELEASER_CONFIG)" release \
-		--skip-validate
+		$(GORELEASER_IMAGE) release --skip-validate \
+		-f "$(GORELEASER_CONFIG)"

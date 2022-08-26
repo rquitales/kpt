@@ -61,17 +61,6 @@ builds:
     env:
       - CC=aarch64-linux-gnu-gcc
       - CXX=aarch64-linux-gnu-g++
-dockers:
-  - ids:
-      - linux-amd64
-    image_templates:
-      - "gcr.io/kpt-dev/kpt:{{ .Tag }}"
-    dockerfile: "release/images/Dockerfile"
-  - ids:
-      - linux-amd64
-    image_templates:
-      - "gcr.io/kpt-dev/kpt-gcloud:{{ .Tag }}"
-    dockerfile: "release/images/Dockerfile-gcloud"
 archives:
   - id: archived
     builds:
@@ -106,7 +95,7 @@ changelog:
       - Merge branch
 release:
   github:
-    owner: GoogleContainerTools
+    owner: rquitales
     name: kpt
   draft: false
   prerelease: true
