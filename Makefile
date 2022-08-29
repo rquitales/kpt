@@ -155,6 +155,7 @@ release-dry-run:
 	@docker run \
 		--rm \
 		--privileged \
+		-t \
 		-v /var/run/docker.sock:/var/run/docker.sock \
 		-v `pwd`:/go/src/github.com/GoogleContainerTools/kpt \
 		-w /go/src/github.com/GoogleContainerTools/kpt \
@@ -171,6 +172,7 @@ release:
 		--rm \
 		--privileged \
 		--env-file .release-env \
+		-t \
 		-v /var/run/docker.sock:/var/run/docker.sock \
 		-v `pwd`:/go/src/github.com/GoogleContainerTools/kpt \
 		-w /go/src/github.com/GoogleContainerTools/kpt \

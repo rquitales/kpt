@@ -39,12 +39,6 @@ jobs:
           git config --global user.name Your Name
           make all
           make test-docker
-      - name: Login to GCR
-        uses: docker/login-action@v1
-        with:
-          registry: gcr.io
-          username: _json_key
-          password: ${{ secrets.GCR_TOKEN }}
       - name: Check Licenses
         run: |
           ./scripts/create-licenses.sh
