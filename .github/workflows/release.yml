@@ -51,7 +51,7 @@ jobs:
       - name: Setup release environment
         id: setup-release-env
         run: |-
-          echo 'GITHUB_TOKEN=${{secrets.GITHUB_TOKEN}}' > .release-env
+          echo 'GITHUB_TOKEN=${{secrets.GITHUB_TOKEN}}' > .release.env
       - name: Run GoReleaser within Docker
         id: run-goreleaser
         run: |
