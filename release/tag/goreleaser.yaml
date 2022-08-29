@@ -65,20 +65,17 @@ dockers:
   - ids:
       - linux-amd64
     image_templates:
-      - "gcr.io/kpt-dev/kpt:{{ .Tag }}"
+      - "gcr.io/rquitales-cs/kpt:{{ .Tag }}"
     dockerfile: "release/images/Dockerfile"
   - ids:
       - linux-amd64
     image_templates:
-      - "gcr.io/kpt-dev/kpt-gcloud:{{ .Tag }}"
+      - "gcr.io/rquitales-cs/kpt-gcloud:{{ .Tag }}"
     dockerfile: "release/images/Dockerfile-gcloud"
 archives:
   - id: archived
     builds:
-      - darwin-amd64
-      - darwin-arm64
       - linux-amd64
-      - linux-arm64
     files:
       - LICENSES*
       - lib.zip*
@@ -86,10 +83,7 @@ archives:
   - id: bin-only
     format: binary
     builds:
-      - darwin-amd64
-      - darwin-arm64
       - linux-amd64
-      - linux-arm64
     name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
 checksum:
   name_template: "checksums.txt"
@@ -106,7 +100,7 @@ changelog:
       - Merge branch
 release:
   github:
-    owner: GoogleContainerTools
+    owner: rquitales
     name: kpt
   draft: false
   prerelease: true

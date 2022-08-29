@@ -189,7 +189,7 @@ release-ci:
 		--rm \
 		--privileged \
 		--env-file .release-env \
-		-v "${HOME}"/.docker/config.json:/root/.docker/config.json \
+		-v ${HOME}/.docker/config.json:/root/.docker/config.json \
 		-v /var/run/docker.sock:/var/run/docker.sock \
 		-v `pwd`:/go/src/github.com/GoogleContainerTools/kpt \
 		-w /go/src/github.com/GoogleContainerTools/kpt \
